@@ -1,0 +1,82 @@
+{
+  "name": "plsql-block-highlighter",
+  "displayName": "PL/SQL Block Highlighter",
+  "description": "Highlights structural keywords (DECLARE, BEGIN, EXCEPTION, END) of the PL/SQL block containing the cursor",
+  "version": "0.1.0",
+  "publisher": "plsql-tools",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["plsql", "sql", "oracle", "highlight", "block"],
+  "activationEvents": [
+    "onLanguage:sql",
+    "onLanguage:plsql"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "plsql",
+        "aliases": ["PL/SQL", "plsql"],
+        "extensions": [".pls", ".pkb", ".pks", ".pck", ".fnc", ".prc", ".trg"]
+      }
+    ],
+    "configuration": {
+      "title": "PL/SQL Block Highlighter",
+      "properties": {
+        "plsqlBlockHighlighter.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable PL/SQL block keyword highlighting."
+        },
+        "plsqlBlockHighlighter.decorationStyle": {
+          "type": "string",
+          "enum": ["border", "background", "bold"],
+          "enumDescriptions": [
+            "Subtle border around each keyword",
+            "Subtle background color on each keyword",
+            "Bold font weight on each keyword"
+          ],
+          "default": "border",
+          "description": "Visual style applied to the highlighted keywords."
+        },
+        "plsqlBlockHighlighter.languages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["sql", "plsql"],
+          "description": "Language IDs for which the extension is active."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc --watch -p ./",
+    "lint": "eslint src test/unit --ext ts",
+    "lint:fix": "eslint src test/unit --ext ts --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:unit:coverage": "vitest run --coverage",
+    "test:vscode": "node ./out/test/vscode-integration/runTest.js",
+    "test": "npm run test:unit",
+    "pretest:vscode": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vitest/coverage-v8": "^1.3.0",
+    "eslint": "^8.56.0",
+    "mocha": "^10.3.0",
+    "prettier": "^3.2.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.3.0"
+  }
+}
