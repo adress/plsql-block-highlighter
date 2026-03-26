@@ -1,7 +1,7 @@
 {
   "name": "plsql-block-highlighter",
   "displayName": "PL/SQL Block Highlighter",
-  "description": "Highlights structural keywords of the PL/SQL block containing the cursor (BEGIN/END, IF/END IF, LOOP/END LOOP, CASE/END) with nesting-level colours",
+  "description": "Highlights structural keywords (DECLARE, BEGIN, EXCEPTION, END, IF, LOOP, CASE) of the PL/SQL block containing the cursor",
   "version": "0.1.0",
   "publisher": "plsql-tools",
   "engines": {
@@ -53,11 +53,6 @@
           "items": { "type": "string" },
           "default": ["sql", "plsql"],
           "description": "Language IDs for which the extension is active."
-        },
-        "plsqlBlockHighlighter.highlightParent": {
-          "type": "boolean",
-          "default": true,
-          "description": "Also show a dimmer underline on the immediate parent block's keywords."
         }
       }
     }
