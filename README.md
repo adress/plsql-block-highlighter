@@ -1,37 +1,81 @@
 # PL/SQL Block Highlighter
 
-A VS Code extension that highlights the structural keywords — **DECLARE**, **BEGIN**, **EXCEPTION**, and **END** — of the innermost PL/SQL block containing the cursor.
+A VS Code extension that highlights the structural keywords of the innermost PL/SQL block containing the cursor — with **soft colour-coding by nesting depth**.
 
-When you move the cursor inside any block, all four boundary keywords light up instantly, making it easy to see where a block starts and ends inside deeply nested code.
-
----
-
-## Features
-
-- Highlights `DECLARE`, `BEGIN`, `EXCEPTION`, `END` of the block under the cursor
-- Tracks nesting: always highlights the **innermost** block
-- Three visual styles: `border` (default), `background`, `bold`
-- Respects `END IF`, `END LOOP`, `END CASE` — does **not** confuse them with block ends
-- Skips string literals and comments during parsing (no false positives)
-- Works on `.sql`, `.pls`, `.pkb`, `.pks`, `.pck`, `.fnc`, `.prc`, `.trg` files
-- Configurable language list, style, and enable/disable toggle
+Move the cursor inside any block and its frame keywords light up instantly. Deeper blocks use a different colour so you can visually orient yourself inside complex nested code without any visual noise from other parts of the file.
 
 ---
 
-## Quick demo
+## Supported structures
+
+| Structure | Opening | Middle | Closing |
+|-----------|---------|--------|---------|
+| Anonymous / named block | `BEGIN` (+ optional `DECLARE`) | `EXCEPTION` | `END` |
+| IF statement | `IF` | `ELSIF`, `ELSE` | `END IF` |
+| LOOP / FOR / WHILE | `LOOP` | — | `END LOOP` |
+| CASE statement | `CASE` | `WHEN`, `ELSE` | `END` (or `END CASE`) |
+
+> **CASE expressions are ignored.** `CASE` is only detected as a block when it
+> is a statement, not when it appears after `:=`, `=`, `(`, `RETURN`, `IN`, `,`
+> or any other operator.
+
+---
+
+## Visual behaviour
+
+- **Active block** — the innermost block containing the cursor is highlighted with a 2 px underline.
+- **Parent block** — the immediate parent is highlighted with a dimmer 1 px underline.
+- **No other blocks** are touched — zero visual noise on the rest of the file.
+- **Colours by nesting level** (modulo 5, works on both dark and light themes):
+
+| Level | Colour |
+|-------|--------|
+| 0 | Blue |
+| 1 | Green |
+| 2 | Amber |
+| 3 | Purple |
+| 4 | Teal |
+
+---
+
+## Examples
+
+### Simple block
 
 ```sql
-DECLARE                     -- highlighted (cursor is inside this block)
+DECLARE                       -- highlighted (cursor is here)
   v_count NUMBER;
-BEGIN                       -- highlighted
-  IF v_count > 0 THEN
-    BEGIN                   -- NOT highlighted (inner block, cursor not here)
-      NULL;
-    END;
-  END IF;
-EXCEPTION                   -- highlighted
+BEGIN                         -- highlighted
+  NULL;
+EXCEPTION                     -- highlighted
   WHEN OTHERS THEN NULL;
-END;                        -- highlighted
+END;                          -- highlighted
+```
+
+### Nested IF inside BEGIN
+
+```sql
+BEGIN                           -- dim parent underline
+  IF v_count > 0 THEN           -- active underline (cursor inside)
+    NULL;                       -- ← cursor here
+  ELSIF v_count = 0 THEN        -- active underline
+    NULL;
+  END IF;                       -- active underline (both END and IF)
+END;
+```
+
+### FOR loop and CASE
+
+```sql
+BEGIN
+  FOR i IN 1 .. 10 LOOP         -- active underline (LOOP keyword)
+    CASE i                      -- would be active if cursor were here
+      WHEN 1 THEN NULL;
+      WHEN 2 THEN NULL;
+      ELSE NULL;
+    END;                        -- closes the CASE
+  END LOOP;
+END;
 ```
 
 ---
@@ -49,42 +93,31 @@ END;                        -- highlighted
 ### Steps
 
 ```bash
-# 1. Clone the repo
 git clone <repo-url>
 cd plsql-block-highlighter
-
-# 2. Install dependencies
 npm install
-
-# 3. Compile TypeScript
 npm run compile
 ```
 
 ---
 
-## Testing in VS Code (Extension Development Host)
+## Testing in VS Code
 
-The fastest way to try the extension is with the built-in **Extension Development Host**.
+### Extension Development Host (recommended)
 
-### Option A — via the Run & Debug panel (recommended)
+1. Open the project folder: `File > Open Folder…`
+2. Press **F5** (or `Run > Start Debugging`)
+3. A second VS Code window opens — **[Extension Development Host]**
+4. Open any `.sql` / `.pls` file and move the cursor
+5. Block keywords highlight automatically
 
-1. Open the project folder in VS Code: `File > Open Folder…`
-2. Press **F5** (or go to **Run > Start Debugging**)
-3. VS Code opens a second window titled **[Extension Development Host]**
-4. In that second window, open any `.sql` or `.pls` file
-5. Move the cursor inside a PL/SQL block — the boundary keywords highlight automatically
+> The `watch` build task starts automatically; reload the Extension Development
+> Host with **Ctrl+R** / **Cmd+R** after source changes.
 
-> The task `watch` runs automatically before launch, so any change you make to
-> `src/` is recompiled live. Just reload the Extension Development Host window
-> with **Ctrl+R** / **Cmd+R** to pick up the change.
-
-### Option B — via the command line
+### Via command line
 
 ```bash
-# Compile once
 npm run compile
-
-# Then open VS Code pointing at the extension folder
 code --extensionDevelopmentPath=$(pwd) .
 ```
 
@@ -92,58 +125,75 @@ code --extensionDevelopmentPath=$(pwd) .
 
 ## Running the tests
 
-### Unit tests (fast, no VS Code required)
-
 ```bash
+# Run all unit tests (no VS Code required)
 npm test
-# or with watch mode:
+
+# Watch mode
 npm run test:unit:watch
-# or with coverage report:
+
+# With coverage report
 npm run test:unit:coverage
 ```
 
-Output example:
+Expected output:
 
 ```
- ✓ test/unit/parser/tokenizer.test.ts        (7 tests)
- ✓ test/unit/parser/blockParser.test.ts      (8 tests)
- ✓ test/unit/parser/highlightService.test.ts (6 tests)
+ ✓ test/unit/scanner/tokenizer.test.ts         (25 tests)
+ ✓ test/unit/parser/blockParser.test.ts        (30 tests)
+ ✓ test/unit/resolver/blockResolver.test.ts    (17 tests)
+ ✓ test/unit/application/highlightService.test.ts (18 tests)
 
- Test Files  3 passed (3)
-      Tests  21 passed (21)
+ Test Files  4 passed (4)
+      Tests  90 passed (90)
 ```
 
-### Lint & format
+---
 
-```bash
-npm run lint          # check for lint errors
-npm run lint:fix      # auto-fix lint errors
-npm run format:check  # check Prettier formatting
-npm run format        # auto-format all files
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| **PL/SQL: Show PL/SQL Structure Tree** | Prints the parsed block tree for the active document in the *PL/SQL Structure* Output Channel. Useful for debugging or understanding complex PL/SQL files. |
+
+Open the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) and type `Show PL/SQL Structure Tree`.
+
+Example output:
+
+```
+═══ PL/SQL Structure Tree ═══
+File : /path/to/package.pkb
+
+[0] DECLARE → BEGIN  L1–L42
+  [1] IF  L5–L12
+    [2] LOOP  L7–L10
+  [1] IF  L15–L30
+    [2] CASE  L17–L28
 ```
 
 ---
 
 ## Configuration
 
-All settings live under `plsqlBlockHighlighter.*` in VS Code settings
-(`Ctrl+,` / `Cmd+,`, search for **PL/SQL Block Highlighter**).
+All settings live under `plsqlBlockHighlighter.*`
+(`Ctrl+,` → search **PL/SQL Block Highlighter**).
 
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable or disable the extension |
-| `decorationStyle` | `"border"` \| `"background"` \| `"bold"` | `"border"` | Visual style of the highlighted keywords |
+| `enabled` | boolean | `true` | Enable/disable the extension |
 | `languages` | string[] | `["sql","plsql"]` | Language IDs where the extension activates |
+| `highlightParent` | boolean | `true` | Show a dimmer underline on the immediate parent block |
 
-### Changing the style
+---
 
-Open your `settings.json` and add:
+## Linting & formatting
 
-```json
-"plsqlBlockHighlighter.decorationStyle": "background"
+```bash
+npm run lint          # check for lint errors
+npm run lint:fix      # auto-fix lint errors
+npm run format:check  # check Prettier formatting
+npm run format        # auto-format
 ```
-
-Or use the Settings UI: search for **PL/SQL Block Highlighter** and pick a style from the dropdown.
 
 ---
 
@@ -152,26 +202,26 @@ Or use the Settings UI: search for **PL/SQL Block Highlighter** and pick a style
 ```
 plsql-block-highlighter/
 ├── src/
-│   ├── extension.ts                  # activate / deactivate entry point
+│   ├── extension.ts                 # activate / deactivate
 │   ├── domain/
-│   │   └── models.ts                 # Position, BlockKeyword, PlsqlBlock
+│   │   └── models.ts                # Token, BlockNode, HighlightResult, …
+│   ├── scanner/
+│   │   └── tokenizer.ts             # hand-written lexer
 │   ├── parser/
-│   │   ├── tokenizer.ts              # hand-written lexer (strips comments/strings)
-│   │   └── blockParser.ts            # stack-based block parser
+│   │   └── blockParser.ts           # builds BlockNode tree
+│   ├── resolver/
+│   │   └── blockResolver.ts         # cursor → active block
 │   ├── application/
-│   │   └── highlightService.ts       # cursor → keywords service (pure, no VS Code)
+│   │   └── highlightService.ts      # pure business logic + formatTree()
 │   └── editor/
-│       ├── decorationManager.ts      # manages VS Code TextEditorDecorationType
-│       └── editorEventHandler.ts     # wires selection / document / config events
+│       ├── decorationManager.ts     # VS Code decorations (nesting colours)
+│       └── editorEventHandler.ts    # events, caching, debug command
 ├── test/
 │   └── unit/
-│       └── parser/
-│           ├── tokenizer.test.ts
-│           ├── blockParser.test.ts
-│           └── highlightService.test.ts
-├── .vscode/
-│   ├── launch.json                   # F5 launch configs
-│   └── tasks.json                    # build tasks
+│       ├── scanner/tokenizer.test.ts
+│       ├── parser/blockParser.test.ts
+│       ├── resolver/blockResolver.test.ts
+│       └── application/highlightService.test.ts
 ├── package.json
 ├── tsconfig.json
 └── vitest.config.ts
@@ -179,30 +229,50 @@ plsql-block-highlighter/
 
 ---
 
-## How it works
+## Architecture overview
 
-1. **Tokenizer** (`tokenizer.ts`) — walks the raw text character by character, emitting keyword tokens while skipping string literals, single-line comments (`--`), and block comments (`/* */`).
+```
+Text document
+     │
+     ▼ (on content change)
+  Scanner  →  Token[]
+     │
+     ▼
+  Parser   →  BlockNode tree  (cached per document version)
+     │
+     ▼ (on cursor move — hot path)
+  Resolver →  active BlockNode + tokens to highlight
+     │
+     ▼
+  DecorationManager  →  VS Code underlines
+```
 
-2. **Block parser** (`blockParser.ts`) — maintains a stack of open `BEGIN` blocks. When it sees `END IF`, `END LOOP`, or `END CASE` it pops a separate non-block counter so those `END` tokens never close a real block.
+**Key performance decision:** the tree is rebuilt only when document content changes. Cursor movement just walks the already-built tree, which is very fast even for large files.
 
-3. **Highlight service** (`highlightService.ts`) — filters all parsed blocks to those whose range contains the cursor, then picks the deepest one and returns its keyword list.
+---
 
-4. **Editor layer** — `EditorEventHandler` listens to `onDidChangeTextEditorSelection`, `onDidChangeTextDocument`, and `onDidChangeConfiguration`, calling the service on every change and applying VS Code decorations via `DecorationManager`.
+## Current limitations
+
+- **CASE expression detection** is heuristic (based on the previous token). It correctly handles `:=`, comparisons, `(`, `RETURN`, `IN`, `,`. Rare edge cases in generated or obfuscated SQL may be misclassified.
+- **Labels** (e.g. `<<my_loop>>`) are not tracked; a labeled `END my_loop;` is treated as a bare `END`.
+- **CURSOR FOR loops** with inline SELECT are supported (the LOOP keyword opens the block regardless of what precedes it).
+- **Trigger bodies** and **package bodies** that start with `AS BEGIN` are parsed correctly because `BEGIN` is the block opener.
+- No support yet for `OPEN cursor FOR …` or other exotic PL/SQL constructs.
 
 ---
 
 ## Supported file extensions
 
-| Extension | Description |
+| Extension | Language ID |
 |-----------|-------------|
-| `.sql` | Generic SQL (language ID `sql`) |
-| `.pls` | PL/SQL source |
-| `.pkb` | Package body |
-| `.pks` | Package specification |
-| `.pck` | Package (combined) |
-| `.fnc` | Function |
-| `.prc` | Procedure |
-| `.trg` | Trigger |
+| `.sql` | `sql` |
+| `.pls` | `plsql` |
+| `.pkb` | `plsql` |
+| `.pks` | `plsql` |
+| `.pck` | `plsql` |
+| `.fnc` | `plsql` |
+| `.prc` | `plsql` |
+| `.trg` | `plsql` |
 
 ---
 

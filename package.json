@@ -1,20 +1,27 @@
 {
   "name": "plsql-block-highlighter",
   "displayName": "PL/SQL Block Highlighter",
-  "description": "Highlights structural keywords (DECLARE, BEGIN, EXCEPTION, END) of the PL/SQL block containing the cursor",
+  "description": "Highlights structural keywords of the PL/SQL block containing the cursor (BEGIN/END, IF/END IF, LOOP/END LOOP, CASE/END) with nesting-level colours",
   "version": "0.1.0",
   "publisher": "plsql-tools",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Programming Languages"],
-  "keywords": ["plsql", "sql", "oracle", "highlight", "block"],
+  "keywords": ["plsql", "sql", "oracle", "highlight", "block", "if", "loop", "case", "nesting"],
   "activationEvents": [
     "onLanguage:sql",
     "onLanguage:plsql"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "plsqlBlockHighlighter.showStructureTree",
+        "title": "Show PL/SQL Structure Tree",
+        "category": "PL/SQL"
+      }
+    ],
     "languages": [
       {
         "id": "plsql",
@@ -46,6 +53,11 @@
           "items": { "type": "string" },
           "default": ["sql", "plsql"],
           "description": "Language IDs for which the extension is active."
+        },
+        "plsqlBlockHighlighter.highlightParent": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also show a dimmer underline on the immediate parent block's keywords."
         }
       }
     }

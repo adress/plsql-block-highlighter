@@ -1,168 +1,224 @@
-import { BlockKeyword, KeywordType, PlsqlBlock } from '../domain/models';
-import { Token, TokenKind, tokenize } from './tokenizer';
+import { Token, TokenKind, BlockType, BlockNode } from '../domain/models';
+import { tokenize } from '../scanner/tokenizer';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Return the next token that is neither a comment nor EOF, together with its index. */
+function nextSignificant(
+  tokens: Token[],
+  from: number,
+): { token: Token; index: number } | null {
+  for (let i = from; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t.kind !== 'EOF') return { token: t, index: i };
+  }
+  return null;
+}
 
 /**
- * Parses PL/SQL text and extracts all BEGIN/END blocks with optional DECLARE/EXCEPTION.
+ * Decide whether the CASE token at `caseIndex` opens a *statement* CASE block.
  *
- * Strategy: walk tokens, maintain a stack of open blocks.
- * CASE ... END CASE and IF ... END IF and LOOP ... END LOOP are not BEGIN/END blocks —
- * we track them separately so their END tokens don't close real blocks.
+ * A CASE is treated as an **expression** (and therefore ignored by the parser)
+ * when the previous significant token is one of:
+ *   :=  =  <  >  <=  >=  !=  <>  (  ,  RETURN  IN  ||  +  -  *  /
+ *
+ * Everything else → statement CASE.
  */
-export function parseBlocks(text: string): PlsqlBlock[] {
-  const tokens = tokenize(text);
-  const blocks: PlsqlBlock[] = [];
-
-  // Stack entries for real BEGIN blocks
-  interface OpenBlock {
-    declare?: BlockKeyword;
-    begin: BlockKeyword;
-    exception?: BlockKeyword;
-    depth: number;
-  }
-
-  const stack: OpenBlock[] = [];
-
-  // Separate counter for non-BEGIN blocks that also end with END (CASE, IF, LOOP)
-  // These consume END tokens without closing a real block.
-  const nonBeginEndStack: Array<'CASE' | 'IF' | 'LOOP'> = [];
-
-  let i = 0;
-
-  function tok(offset = 0): Token {
-    return tokens[Math.min(i + offset, tokens.length - 1)];
-  }
-
-  function kw(t: Token, kind: TokenKind): boolean {
-    return t.kind === kind;
-  }
-
-  function makeKw(t: Token): BlockKeyword {
-    return {
-      type: t.kind as KeywordType,
-      start: t.start,
-      end: t.end,
-    };
-  }
-
-  // Lookahead: skip past optional label e.g.  END LOOP label_name ;
-  function peekEndModifier(): 'CASE' | 'IF' | 'LOOP' | null {
-    const next = tok(1);
-    if (kw(next, 'CASE')) return 'CASE';
-    if (kw(next, 'IF')) return 'IF';
-    if (kw(next, 'LOOP')) return 'LOOP';
-    return null;
-  }
-
-  // Check if this BEGIN is actually part of a CASE WHEN THEN ... BEGIN structure
-  // For simplicity, every standalone BEGIN opens a real block.
-
-  while (i < tokens.length) {
-    const t = tok();
-
-    if (kw(t, 'CASE')) {
-      nonBeginEndStack.push('CASE');
-      i++;
-      continue;
+function isStatementCase(tokens: Token[], caseIndex: number): boolean {
+  for (let i = caseIndex - 1; i >= 0; i--) {
+    const t = tokens[i];
+    if (
+      t.kind === 'ASSIGN' || // :=
+      t.kind === 'OPERATOR' || // = < > <= >= != <> || + - * / …
+      t.kind === 'LPAREN' || // (
+      t.kind === 'COMMA' || // ,
+      t.kind === 'RETURN' || // RETURN <expr>
+      t.kind === 'IN' // x IN (CASE …)
+    ) {
+      return false;
     }
+    // Any other token → this is a statement-level CASE
+    return true;
+  }
+  // Nothing before CASE → statement level (e.g. very first token)
+  return true;
+}
 
-    if (kw(t, 'IF')) {
-      nonBeginEndStack.push('IF');
-      i++;
-      continue;
+function createNode(type: BlockType, startToken: Token, stack: BlockNode[]): BlockNode {
+  return {
+    type,
+    startToken,
+    endToken: null,
+    middleTokens: [],
+    startLine: startToken.start.line,
+    endLine: null,
+    nestingLevel: stack.length,
+    parent: stack.length > 0 ? stack[stack.length - 1] : null,
+    children: [],
+  };
+}
+
+function attachNode(node: BlockNode, roots: BlockNode[], stack: BlockNode[]): void {
+  if (node.parent) {
+    node.parent.children.push(node);
+  } else {
+    roots.push(node);
+  }
+  stack.push(node);
+}
+
+/**
+ * Close the topmost block whose type is in `types` (searching down the stack).
+ * Everything above that block remains on the stack with `endToken = null`
+ * (they are considered incomplete / badly nested).
+ *
+ * Pass `types = null` to close whatever is on top (used for bare END).
+ */
+function resolveClosingToken(
+  stack: BlockNode[],
+  types: BlockType | BlockType[] | null,
+  endToken: Token,
+  endSuffixToken?: Token,
+): void {
+  const allowed = types === null ? null : Array.isArray(types) ? types : [types];
+
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (allowed === null || allowed.includes(stack[i].type)) {
+      const node = stack[i];
+      node.endToken = endToken;
+      if (endSuffixToken) node.endSuffixToken = endSuffixToken;
+      node.endLine = (endSuffixToken ?? endToken).end.line;
+      // Remove this node and everything above it from the open stack.
+      stack.splice(i);
+      return;
     }
+  }
+  // No matching open block found — ignore the stray END.
+}
 
-    if (kw(t, 'LOOP')) {
-      nonBeginEndStack.push('LOOP');
-      i++;
-      continue;
-    }
+// ─────────────────────────────────────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────────────────────────────────────
 
-    if (kw(t, 'DECLARE')) {
-      // DECLARE starts an anonymous block — peek ahead to associate with next BEGIN
-      // Store as a "pending declare" that the next BEGIN will pick up
-      // We handle this by looking for the immediately following BEGIN
-      const declareKw = makeKw(t);
-      i++;
-      // Skip tokens until we hit BEGIN (the matching one),
-      // but we also need to handle nested structures.
-      // Simple approach: just push onto stack and let BEGIN handle it.
-      // We push a sentinel entry.
-      stack.push({
-        declare: declareKw,
-        begin: declareKw, // placeholder, will be replaced when BEGIN is found
-        depth: stack.length,
-      });
-      continue;
-    }
+/**
+ * Parse PL/SQL source text and return the root nodes of the block tree.
+ *
+ * Each `BlockNode` has a `parent` reference and a `children` array, forming
+ * a proper tree.  Incomplete (unclosed) blocks have `endToken = null`.
+ */
+export function parseBlocks(text: string): BlockNode[] {
+  return parseTokens(tokenize(text));
+}
 
-    if (kw(t, 'BEGIN')) {
-      const beginKw = makeKw(t);
-      // Check if top of stack has a pending DECLARE (placeholder)
-      if (stack.length > 0) {
+/**
+ * Build the block tree from a pre-tokenised stream.
+ * Exposed for unit testing.
+ */
+export function parseTokens(tokens: Token[]): BlockNode[] {
+  const roots: BlockNode[] = [];
+  /** Open (not yet closed) blocks, outermost first. */
+  const stack: BlockNode[] = [];
+  /** DECLARE token waiting to be consumed by the next BEGIN. */
+  let pendingDeclare: Token | null = null;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+
+    switch (token.kind as TokenKind) {
+      // ── DECLARE ─────────────────────────────────────────────────────────
+      case 'DECLARE': {
+        // Reset any previous orphaned DECLARE (malformed input).
+        pendingDeclare = token;
+        break;
+      }
+
+      // ── BEGIN ────────────────────────────────────────────────────────────
+      case 'BEGIN': {
+        const node = createNode('BEGIN', token, stack);
+        if (pendingDeclare) {
+          node.declareToken = pendingDeclare;
+          pendingDeclare = null;
+        }
+        attachNode(node, roots, stack);
+        break;
+      }
+
+      // ── IF ───────────────────────────────────────────────────────────────
+      case 'IF': {
+        const node = createNode('IF', token, stack);
+        attachNode(node, roots, stack);
+        break;
+      }
+
+      // ── LOOP ─────────────────────────────────────────────────────────────
+      // FOR … LOOP and WHILE … LOOP also hit this branch because LOOP is the
+      // structural keyword that opens the block body.
+      case 'LOOP': {
+        const node = createNode('LOOP', token, stack);
+        attachNode(node, roots, stack);
+        break;
+      }
+
+      // ── CASE ─────────────────────────────────────────────────────────────
+      case 'CASE': {
+        if (!isStatementCase(tokens, i)) break; // expression CASE → ignore
+        const node = createNode('CASE', token, stack);
+        attachNode(node, roots, stack);
+        break;
+      }
+
+      // ── EXCEPTION ────────────────────────────────────────────────────────
+      case 'EXCEPTION': {
         const top = stack[stack.length - 1];
-        if (top.declare && top.begin === top.declare) {
-          // Replace placeholder
-          top.begin = beginKw;
-          i++;
-          continue;
+        if (top?.type === 'BEGIN') top.middleTokens.push(token);
+        break;
+      }
+
+      // ── ELSIF / ELSE ─────────────────────────────────────────────────────
+      case 'ELSIF':
+      case 'ELSE': {
+        const top = stack[stack.length - 1];
+        if (top?.type === 'IF' || top?.type === 'CASE') top.middleTokens.push(token);
+        break;
+      }
+
+      // ── WHEN ─────────────────────────────────────────────────────────────
+      // Only record WHEN when directly inside a CASE block (not inside a nested
+      // BEGIN that was opened in a WHEN branch).
+      case 'WHEN': {
+        const top = stack[stack.length - 1];
+        if (top?.type === 'CASE') top.middleTokens.push(token);
+        break;
+      }
+
+      // ── END ──────────────────────────────────────────────────────────────
+      case 'END': {
+        const next = nextSignificant(tokens, i + 1);
+
+        if (next?.token.kind === 'IF') {
+          i = next.index;
+          resolveClosingToken(stack, 'IF', token, next.token);
+        } else if (next?.token.kind === 'LOOP') {
+          i = next.index;
+          resolveClosingToken(stack, 'LOOP', token, next.token);
+        } else if (next?.token.kind === 'CASE') {
+          // END CASE is an optional alternative closer for CASE blocks.
+          i = next.index;
+          resolveClosingToken(stack, 'CASE', token, next.token);
+        } else {
+          // Bare END → closes the nearest BEGIN or CASE on the stack.
+          resolveClosingToken(stack, ['BEGIN', 'CASE'], token);
         }
+        break;
       }
-      stack.push({ begin: beginKw, depth: stack.length });
-      i++;
-      continue;
+
+      default:
+        // Any other token (THEN, FOR, WHILE, WORD, SEMICOLON, …) — no action.
+        break;
     }
-
-    if (kw(t, 'EXCEPTION')) {
-      if (stack.length > 0) {
-        stack[stack.length - 1].exception = makeKw(t);
-      }
-      i++;
-      continue;
-    }
-
-    if (kw(t, 'END')) {
-      const endModifier = peekEndModifier();
-
-      if (endModifier !== null) {
-        // This END closes a CASE/IF/LOOP — pop from nonBeginEndStack
-        // Find and pop the matching non-begin entry
-        for (let j = nonBeginEndStack.length - 1; j >= 0; j--) {
-          if (nonBeginEndStack[j] === endModifier) {
-            nonBeginEndStack.splice(j, 1);
-            break;
-          }
-        }
-        // Skip END + modifier token
-        i += 2;
-        // Skip optional label (WORD token)
-        if (kw(tok(), 'WORD')) i++;
-        continue;
-      }
-
-      // This END closes a real BEGIN block
-      if (stack.length > 0) {
-        const open = stack.pop()!;
-        // Skip the placeholder-begin case (no real begin was found yet)
-        if (open.declare && open.begin === open.declare) {
-          // Malformed — just discard
-          i++;
-          continue;
-        }
-        const endKw = makeKw(t);
-        blocks.push({
-          declare: open.declare,
-          begin: open.begin,
-          exception: open.exception,
-          end: endKw,
-          depth: open.depth,
-        });
-      }
-      i++;
-      continue;
-    }
-
-    i++;
   }
 
-  return blocks;
+  return roots;
 }
